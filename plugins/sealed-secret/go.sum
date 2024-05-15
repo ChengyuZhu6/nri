@@ -1,5 +1,7 @@
 github.com/ChengyuZhu6/cdh-go-client v0.0.0-20240510062504-ffbb73c2e151 h1:CvSenhIF7LaD1AmTuptdVx7la1bwGfn40Cc6xP/QLSM=
 github.com/ChengyuZhu6/cdh-go-client v0.0.0-20240510062504-ffbb73c2e151/go.mod h1:oJwVzmHRwx4UoH2xHwMG1iTX5zlLPjU2ONILn4/sG5I=
+github.com/ChengyuZhu6/cdh-go-client v0.0.0-20240515070650-85e3d09a43eb h1:gkPfjO8G+zxERXzQ8P3vWQDDXgopmRD2T0m4idsuzxU=
+github.com/ChengyuZhu6/cdh-go-client v0.0.0-20240515070650-85e3d09a43eb/go.mod h1:oJwVzmHRwx4UoH2xHwMG1iTX5zlLPjU2ONILn4/sG5I=
 github.com/containerd/nri v0.6.1 h1:xSQ6elnQ4Ynidm9u49ARK9wRKHs80HCUI+bkXOxV4mA=
 github.com/containerd/nri v0.6.1/go.mod h1:7+sX3wNx+LR7RzhjnJiUkFDhn18P5Bg/0VnJ/uXpRJM=
 github.com/containerd/ttrpc v1.2.3 h1:4jlhbXIGvijRtNC8F/5CpuJZ7yKOBFGFOOXg1bkISz0=

@@ -3,7 +3,7 @@ module github.com/containerd/nri/plugins/sealed-secret
 go 1.21.6
 
 require (
-	github.com/ChengyuZhu6/cdh-go-client v0.0.0-20240510062504-ffbb73c2e151
+	github.com/ChengyuZhu6/cdh-go-client v0.0.0-20240515070650-85e3d09a43eb
 	github.com/containerd/nri v0.6.1
 	github.com/sirupsen/logrus v1.8.1
 	sigs.k8s.io/yaml v1.4.0

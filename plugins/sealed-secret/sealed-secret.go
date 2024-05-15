@@ -18,13 +18,17 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/sirupsen/logrus"
 	"sigs.k8s.io/yaml"
+
+	"io/ioutil"
 
 	cdhgrpcapi "github.com/ChengyuZhu6/cdh-go-client/pkg/grpc"
 	"github.com/containerd/nri/pkg/api"
@@ -53,25 +57,37 @@ var (
 
 const (
 	sealedSecretPrefix = "sealed."
+	sealedSecretDir    = "/etc/sealed-secret"
 )
 
 func HasSealedSecretsPrefix(value string) bool {
 	return strings.HasPrefix(value, sealedSecretPrefix)
 }
 
-func UnsealedSecretByCDH(value string) (string, error) {
+func UnsealedSecretByCDH(isFile bool, value string) (string, error) {
 	c, err := cdhgrpcapi.CreateCDHGrpcClient(cdhgrpcapi.CDHGrpcSocket)
 	if err != nil {
 		log.Infof("failed to create cdh client = ", err)
 		return "", fmt.Errorf("failed to create cdh client %v", err)
 	}
 	defer c.Close()
-	unsealedValue, err := c.UnsealEnv(context.Background(), value)
-	if err != nil {
-		log.Infof("failed to get unsealed value = ", err)
-		return "", fmt.Errorf("failed to get unsealed value! err = %v", err)
+	var unsealedValue string
+	if !isFile {
+		unsealedValue, err = c.UnsealEnv(context.Background(), value)
+		if err != nil {
+			log.Infof("failed to get unsealed value from env = ", err)
+			return "", fmt.Errorf("failed to get unsealed value from env! err = %v", err)
+		}
+		log.Infof("unsealed value from env = %s", unsealedValue)
+	} else {
+		unsealedValue, err = c.UnsealFile(context.Background(), value)
+		if err != nil {
+			log.Infof("failed to get unsealed value from file = ", err)
+			return "", fmt.Errorf("failed to get unsealed value from file! err = %v", err)
+		}
+		log.Infof("unsealed value from file = %s", unsealedValue)
 	}
-	log.Infof("unsealed value = %s", unsealedValue)
+
 	return unsealedValue, nil
 }
 
@@ -148,13 +164,13 @@ func (p *plugin) CreateContainer(_ context.Context, pod *api.PodSandbox, contain
 		adjust.AddEnv(cfg.SetEnv, fmt.Sprintf("logger-pid-%d", os.Getpid()))
 	}
 
-	env := api.FromOCIEnv(container.Env)
+	env := api.FromOCIEnv(container.GetEnv())
 	for _, e := range env {
 		if HasSealedSecretsPrefix(e.Value) {
-			log.Infof("Found sealed secret value = ", e.Value)
-			unsealedValue, err := UnsealedSecretByCDH(e.Value)
+			log.Infof("Found sealed secret value from env =", e.Value)
+			unsealedValue, err := UnsealedSecretByCDH(false, e.Value)
 			if err != nil {
-				log.Infof("failed to get unsealed value! err = %v", err)
+				log.Infof("failed to get unsealed value from env! err = %v", err)
 				return adjust, nil, nil
 			}
 			adjust.RemoveEnv(e.Key)
@@ -162,6 +178,86 @@ func (p *plugin) CreateContainer(_ context.Context, pod *api.PodSandbox, contain
 		}
 	}
 	dump("CreateContainer adjust", "adjust env ", adjust.Env)
+
+	mounts := container.GetMounts()
+
+	var updated_mounts []*api.Mount
+	for _, m := range mounts {
+		source := m.GetSource()
+		if strings.Contains(source, "kubernetes.io~secret") {
+
+			if _, err := os.Stat(source); errors.Is(err, os.ErrNotExist) {
+				log.Infof("sealed source path %s does not exist", source)
+				break
+			}
+			entries, err := os.ReadDir(source)
+			if err != nil {
+				log.Infof("read sealed source path dir %s failed", source)
+				break
+			}
+
+			for _, entry := range entries {
+				entryPath := filepath.Join(source, entry.Name())
+
+				fileInfo, err := os.Lstat(entryPath)
+				if err != nil {
+					log.Infof("faild to get sealed source path entry %s, err = %w", entryPath, err)
+					break
+				}
+				if fileInfo.Mode()&os.ModeSymlink == 0 && !fileInfo.Mode().IsRegular() {
+					log.Infof("skipping sealed source entry %s because its file type is %s", entry.Name(), fileInfo.Mode())
+					continue
+				}
+				targetPath, err := filepath.EvalSymlinks(entryPath)
+				if err != nil {
+					log.Infof("faild to EvalSymlinks %s, err = %w", entryPath, err)
+					break
+				}
+				log.Printf("sealed source entry target path: %s", targetPath)
+				if fileInfo, err := os.Stat(targetPath); err != nil || !fileInfo.Mode().IsRegular() {
+					log.Printf("sealed source is not a file: %s", targetPath)
+					continue
+				}
+
+				//Get unsealed value from CDH
+				unsealedValue, err := UnsealedSecretByCDH(true, targetPath)
+				if err != nil {
+					log.Infof("failed to get unsealed value from file! err = %v", err)
+					return adjust, nil, nil
+				}
+				log.Infof("sealed secret value from file =", unsealedValue)
+
+				//Write the unsealed value to a temp file
+				tempDir, err := ioutil.TempDir("", "test")
+				if err != nil {
+					log.Infof("failed to create tmp dir! err = %v", err)
+					return adjust, nil, nil
+				}
+				unsealedFilename := filepath.Join(tempDir, entry.Name())
+				if err := ioutil.WriteFile(unsealedFilename, []byte(unsealedValue), 0644); err != nil {
+					log.Infof("failed to write file %s! err = %w", unsealedFilename, err)
+					return adjust, nil, nil
+				}
+				log.Infof("Write sealed secret value to file %s successfully", unsealedFilename)
+
+				//Remove the source mount and add the new mount
+				adjust.RemoveMount(source)
+				mount := api.Mount{
+					Source:      tempDir,
+					Destination: m.GetDestination(),
+					Type:        m.GetType(),
+					Options:     m.GetOptions(),
+				}
+				updated_mounts = append(updated_mounts, &mount)
+			}
+		}
+	}
+
+	if len(updated_mounts) > 0 {
+		for _, m := range updated_mounts {
+			adjust.AddMount(m)
+		}
+	}
 
 	return adjust, nil, nil
 }
